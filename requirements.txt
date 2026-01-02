@@ -1,0 +1,11 @@
+# WiiAutoConvert - RVZ to WBFS Converter
+# Python dependencies
+
+# UI Framework
+customtkinter>=5.2.0
+
+# Build tools (optional, for creating executables)
+# pyinstaller>=5.13.0  # Uncomment if building executables
+
+# Python 3.10+ required
+

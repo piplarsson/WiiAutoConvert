@@ -1,0 +1,82 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Application specific
+*.log
+*.iso
+*.wbfs
+temp/
+tmp/
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Temporary conversion files
+rvz2wbfs_temp/
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec.bak
+*.pyc
+WiiAutoConvert.spec.bak
+
+# Build logs
+build*.log
+build.log
+tool_download.log
+tool_download_error.txt
+
+# Executable files (if building)
+*.exe
+*.app
+*.dmg
+
+# Tools directory (will be auto-downloaded)
+# Keep the directory structure but ignore tool binaries
+tools/dolphin/*.exe
+tools/dolphin/dolphin-tool
+tools/wit/*.exe
+tools/wit/wit
+tools/*.zip
+tools/*.tar.gz
+tools/wit_temp/
+
