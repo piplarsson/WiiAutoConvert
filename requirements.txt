@@ -4,8 +4,11 @@
 # UI Framework
 customtkinter>=5.2.0
 
+# Native file/folder drag-and-drop support for the GUI
+# Required for dropping RVZ / ZIP files and folders into the app
+tkinterdnd2>=0.4.3
+
 # Build tools (optional, for creating executables)
 # pyinstaller>=5.13.0  # Uncomment if building executables
 
 # Python 3.10+ required
-

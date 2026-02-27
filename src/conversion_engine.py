@@ -475,9 +475,15 @@ class ConversionEngine:
                 error_message=f"Input directory not found: {input_dir}"
             )]
         
-        # Find all RVZ files
-        rvz_files = list(input_dir.rglob("*.rvz"))
-        rvz_files.extend(input_dir.rglob("*.RVZ"))
+        # Find all RVZ files (dedupe for case-insensitive filesystems like Windows)
+        seen = set()
+        rvz_files = []
+        for pattern in ("*.rvz", "*.RVZ"):
+            for f in input_dir.rglob(pattern):
+                key = str(f.resolve()).lower()
+                if key not in seen:
+                    seen.add(key)
+                    rvz_files.append(f)
         
         if not rvz_files:
             return [ConversionResult(

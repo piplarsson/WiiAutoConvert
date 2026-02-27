@@ -20,7 +20,6 @@ def main():
     except ImportError:
         print("PyInstaller not found. Installing...")
         try:
-            import subprocess
             subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller"])
             print("PyInstaller installed successfully!")
             # Try importing again
@@ -32,20 +31,7 @@ def main():
     
     # PyInstaller command (use python -m PyInstaller for better compatibility)
     cmd = [
-        sys.executable, "-m", "PyInstaller",
-        "--name=WiiAutoConvert",
-        "--onefile",
-        "--windowed",  # No console window for GUI
-        "--icon=NONE",  # Add icon file path here if you have one
-        "--add-data=tools;tools",  # Include tools directory (Windows)
-        "--hidden-import=customtkinter",
-        "--hidden-import=tkinter",
-        "--hidden-import=tkinter.filedialog",
-        "--hidden-import=tkinter.messagebox",
-        "--collect-all=customtkinter",
-        "--noconfirm",  # Overwrite output without asking
-        "main.py"
-    ]
+        sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "WiiAutoConvert.spec"]
     
     # Adjust for Linux/macOS
     if sys.platform != "win32":

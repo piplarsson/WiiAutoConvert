@@ -146,7 +146,10 @@ class ZipHandler:
     
     def find_zip_files(self, path: Path) -> List[Path]:
         """
-        Find all ZIP files in a path (file or directory).
+        Find all ZIP files in a path (file or directory), deduplicated.
+        
+        On Windows, scanning both "*.zip" and "*.ZIP" can return the same
+        file twice because the filesystem is usually case-insensitive.
         
         Args:
             path: File or directory path
@@ -155,19 +158,27 @@ class ZipHandler:
             List of ZIP file paths
         """
         path = Path(path).resolve()
-        zip_files = []
+        zip_files: List[Path] = []
+        seen: set[str] = set()
+        
+        def add_zip(candidate: Path) -> None:
+            try:
+                key = str(candidate.resolve()).lower()
+            except OSError:
+                key = str(candidate).lower()
+            
+            if key in seen:
+                return
+            if self.is_zip_file(candidate):
+                seen.add(key)
+                zip_files.append(candidate)
         
         if path.is_file():
-            if self.is_zip_file(path):
-                zip_files.append(path)
+            add_zip(path)
         elif path.is_dir():
-            # Find ZIP files
-            for zip_file in path.rglob("*.zip"):
-                if self.is_zip_file(zip_file):
-                    zip_files.append(zip_file)
-            for zip_file in path.rglob("*.ZIP"):
-                if self.is_zip_file(zip_file):
-                    zip_files.append(zip_file)
+            for pattern in ("*.zip", "*.ZIP"):
+                for zip_file in path.rglob(pattern):
+                    add_zip(zip_file)
         
-        return sorted(zip_files)
+        return sorted(zip_files, key=lambda p: str(p).lower())
 

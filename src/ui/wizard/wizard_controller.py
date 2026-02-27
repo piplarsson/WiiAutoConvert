@@ -114,17 +114,21 @@ class WizardController:
     
     def get_next_button_text(self) -> str:
         """Get the text for the next button based on current page."""
-        if self.current_page == len(self.pages) - 1:
+        # The progress page is the last page. Conversion must start from the
+        # page before it, otherwise the user lands on the progress page and the
+        # only obvious action is the watch-mode button.
+        if self.current_page == len(self.pages) - 2:
             return "Start Conversion"
         return "Next"
     
     def next_page(self):
         """Move to next page if current page is valid."""
         if self._is_current_page_valid():
-            if self.current_page < len(self.pages) - 1:
+            # Normal page advance until the last configuration page.
+            if self.current_page < len(self.pages) - 2:
                 self.go_to_page(self.current_page + 1)
-            elif self.current_page == len(self.pages) - 1:
-                # Last page - start conversion
+            # Start conversion from the final configuration page.
+            elif self.current_page == len(self.pages) - 2:
                 if self.on_start_conversion:
                     self.is_executing = True
                     self.on_start_conversion(self.config)
@@ -156,10 +160,11 @@ class WizardController:
             # Hide navigation during execution
             self.nav_frame.pack_forget()
         elif is_progress_page and not self.is_executing:
-            # Show navigation but disable buttons on progress page when idle
+            # Show navigation on the progress page when idle so the user can go
+            # back and change settings after a completed run.
             self.nav_frame.pack(fill="x", side="bottom", anchor="s", pady=(SPACING["card_gap"], 0))
             if hasattr(self.nav_frame, 'set_back_enabled'):
-                self.nav_frame.set_back_enabled(False)
+                self.nav_frame.set_back_enabled(True)
             if hasattr(self.nav_frame, 'set_next_enabled'):
                 self.nav_frame.set_next_enabled(False)
         elif is_page_2_or_3:

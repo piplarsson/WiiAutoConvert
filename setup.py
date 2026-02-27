@@ -36,6 +36,7 @@ setup(
     python_requires=">=3.10",
     install_requires=[
         "customtkinter>=5.2.0",
+        "tkinterdnd2>=0.4.0",
     ],
     entry_points={
         "console_scripts": [

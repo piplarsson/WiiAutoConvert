@@ -9,6 +9,27 @@ from typing import Optional
 import threading
 import queue
 
+try:
+    from tkinterdnd2 import TkinterDnD
+
+    class DnDCTk(ctk.CTk, TkinterDnD.DnDWrapper):
+        """CustomTkinter root window with native file drop support."""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.TkdndVersion = TkinterDnD._require(self)
+            self._wii_dnd_enabled = True
+
+except ImportError:
+    TkinterDnD = None
+
+    class DnDCTk(ctk.CTk):
+        """Fallback root window when tkinterdnd2 is unavailable."""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._wii_dnd_enabled = False
+
 from .theme import COLORS, SPACING, configure_theme
 from .wizard.wizard_controller import WizardController, ConversionConfig
 from .wizard.page_input import PageInput
@@ -600,27 +621,37 @@ class ConversionUI:
                     )
                     all_results.append(result)
                 else:
-                    # Directory processing (same as original)
-                    zip_files = self.zip_handler.find_zip_files(input_path)
+                    # Directory processing with Windows-safe dedupe
+                    seen_zip = set()
+                    zip_files = []
+                    for zip_file in self.zip_handler.find_zip_files(input_path):
+                        try:
+                            zip_key = str(zip_file.resolve()).lower()
+                        except Exception:
+                            zip_key = str(zip_file).lower()
+                        if zip_key not in seen_zip:
+                            seen_zip.add(zip_key)
+                            zip_files.append(zip_file)
+
                     for zip_file in zip_files:
                         if self.cancel_requested:
                             break
-                        
+
                         self.update_queue.put(("log", f"Processing ZIP file: {zip_file.name}"))
                         try:
                             extracted_rvz, extract_dir = self.zip_handler.extract_rvz_from_zip(zip_file)
                             self.update_queue.put(("log", f"Extracted {len(extracted_rvz)} RVZ file(s) from ZIP"))
-                            
+
                             zip_results = []
                             for rvz_file in extracted_rvz:
                                 if self.cancel_requested:
                                     break
-                                
+
                                 if config.cleanup.preserve_structure:
                                     output_wbfs = config.output_dir / (rvz_file.stem + ".wbfs")
                                 else:
                                     output_wbfs = config.output_dir / (rvz_file.stem + ".wbfs")
-                                
+
                                 result = engine.convert_file(
                                     rvz_file,
                                     output_wbfs,
@@ -629,11 +660,11 @@ class ConversionUI:
                                 )
                                 zip_results.append(result)
                                 all_results.append(result)
-                            
+
                             if not config.cleanup.keep_extracted:
                                 self.zip_handler.cleanup_extraction(extract_dir)
                                 self.update_queue.put(("log", "Cleaned up extracted files"))
-                            
+
                             should_delete_zip = not self.network_mover or config.cleanup.delete_zip or (config.cleanup.delete_after_network_move and self.network_mover)
                             if should_delete_zip:
                                 all_succeeded = all(r.status == ConversionStatus.SUCCESS for r in zip_results)
@@ -645,7 +676,7 @@ class ConversionUI:
                                         self.update_queue.put(("log", f"Warning: Could not delete ZIP file {zip_file.name}: {e}"))
                                 else:
                                     self.update_queue.put(("log", f"Not deleting ZIP file due to conversion failures: {zip_file.name}"))
-                        
+
                         except Exception as e:
                             self.update_queue.put(("log", f"ERROR: Failed to process ZIP {zip_file.name}: {e}"))
                             all_results.append(ConversionResult(
@@ -654,10 +685,19 @@ class ConversionUI:
                                 status=ConversionStatus.FAILED,
                                 error_message=f"ZIP processing failed: {str(e)}"
                             ))
-                    
-                    rvz_files = list(input_path.rglob("*.rvz"))
-                    rvz_files.extend(input_path.rglob("*.RVZ"))
-                    
+
+                    seen_rvz = set()
+                    rvz_files = []
+                    for pattern in ("*.rvz", "*.RVZ"):
+                        for rvz_file in input_path.rglob(pattern):
+                            try:
+                                rvz_key = str(rvz_file.resolve()).lower()
+                            except Exception:
+                                rvz_key = str(rvz_file).lower()
+                            if rvz_key not in seen_rvz:
+                                seen_rvz.add(rvz_key)
+                                rvz_files.append(rvz_file)
+
                     extract_base = self.zip_handler.extract_dir
                     rvz_files = [f for f in rvz_files if extract_base not in f.parents]
                     
@@ -817,7 +857,7 @@ class ConversionUI:
 
 def main():
     """Main UI entry point."""
-    root = ctk.CTk()
+    root = DnDCTk()
     app = ConversionUI(root)
     
     # Handle window close - stop watch mode if running

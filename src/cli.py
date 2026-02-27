@@ -4,6 +4,7 @@ Command-line interface for RVZ to WBFS conversion.
 """
 
 import argparse
+import logging
 import sys
 import time
 from pathlib import Path
@@ -12,6 +13,11 @@ from typing import List, Optional
 from .conversion_engine import ConversionEngine, ConversionStatus
 from .logger import setup_logger
 from .zip_handler import ZipHandler
+
+try:
+    from .watch_mode import WatchMode
+except ImportError:
+    WatchMode = None
 
 
 def find_rvz_files(path: Path, zip_handler: Optional[ZipHandler] = None) -> List[Path]:
@@ -40,9 +46,14 @@ def find_rvz_files(path: Path, zip_handler: Optional[ZipHandler] = None) -> List
         elif path.suffix.lower() == ".rvz":
             rvz_files.append(path)
     elif path.is_dir():
-        # Find RVZ files directly
-        rvz_files.extend(path.rglob("*.rvz"))
-        rvz_files.extend(path.rglob("*.RVZ"))
+        # Find RVZ files directly (dedupe for case-insensitive filesystems like Windows)
+        seen = set()
+        for pattern in ("*.rvz", "*.RVZ"):
+            for f in path.rglob(pattern):
+                key = str(f.resolve()).lower()
+                if key not in seen:
+                    seen.add(key)
+                    rvz_files.append(f)
         
         # Find and extract ZIP files if handler provided
         if zip_handler:
@@ -287,6 +298,9 @@ Examples:
     
     output_dir = args.output.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Default: network move disabled unless a mover is initialized elsewhere
+    network_mover = None
     
     # Handle watch mode (skip regular conversion)
     if args.watch:
@@ -321,223 +335,229 @@ Examples:
             logger.info(f"Detected ZIP file: {input_path}")
             try:
                 extracted_rvz, extract_dir = zip_handler.extract_rvz_from_zip(input_path)
-            logger.info(f"Extracted {len(extracted_rvz)} RVZ file(s) from ZIP")
-            
-            results = []
-            for rvz_file in extracted_rvz:
-                # Determine output path based on original ZIP name or RVZ name
-                if len(extracted_rvz) == 1:
-                    # Single file in ZIP - use ZIP name
-                    output_wbfs = output_dir / (input_path.stem + ".wbfs")
-                else:
-                    # Multiple files - use RVZ name
-                    output_wbfs = output_dir / (rvz_file.stem + ".wbfs")
+                logger.info(f"Extracted {len(extracted_rvz)} RVZ file(s) from ZIP")
                 
-                result = engine.convert_file(
-                    rvz_file,
-                    output_wbfs,
-                    keep_iso=args.keep_iso,
-                    verbose=args.verbose
-                )
-                results.append(result)
-                
-                # Move to network if enabled and conversion succeeded
-                if network_mover and result.status == ConversionStatus.SUCCESS and result.output_file:
-                    move_result = network_mover.move_file(result.output_file, output_dir)
-                    if move_result.success:
-                        logger.info(f"Successfully moved {result.output_file.name} to network")
-                        # Delete local WBFS if option is enabled
-                        if args.delete_after_network_move:
-                            try:
-                                result.output_file.unlink()
-                                logger.info(f"Deleted local WBFS file: {result.output_file.name}")
-                                print(f"Deleted local WBFS file: {result.output_file.name}")
-                            except Exception as e:
-                                logger.warning(f"Failed to delete local WBFS file: {e}")
-                    elif not move_result.skipped:
-                        logger.warning(f"Failed to move {result.output_file.name} to network: {move_result.error_message}")
+                results = []
+                for rvz_file in extracted_rvz:
+                    # Determine output path based on original ZIP name or RVZ name
+                    if len(extracted_rvz) == 1:
+                        # Single file in ZIP - use ZIP name
+                        output_wbfs = output_dir / (input_path.stem + ".wbfs")
                     else:
-                        logger.info(f"Skipped moving {result.output_file.name} to network (file exists)")
-            
-            # Cleanup extracted files unless --keep-extracted
-            if not args.keep_extracted:
-                zip_handler.cleanup_extraction(extract_dir)
-                logger.info("Cleaned up extracted files")
-            
-            # Delete original ZIP file if all conversions succeeded
-            # For local conversions (no network_mover): always delete after success
-            # For network conversions: delete if delete_zip is enabled OR delete_after_network_move is enabled
-            should_delete_zip = not network_mover or args.delete_zip or (args.delete_after_network_move and network_mover)
-            if should_delete_zip:
-                all_succeeded = all(r.status == ConversionStatus.SUCCESS for r in results)
-                if all_succeeded:
-                    try:
-                        input_path.unlink()
-                        logger.info(f"Deleted original ZIP file: {input_path}")
-                        print(f"Deleted original ZIP file: {input_path.name}")
-                    except Exception as e:
-                        logger.warning(f"Failed to delete ZIP file {input_path}: {e}")
-                        print(f"Warning: Could not delete ZIP file {input_path.name}: {e}")
-                else:
-                    logger.info(f"Not deleting ZIP file due to conversion failures: {input_path}")
-        
-        except Exception as e:
-            logger.error(f"Failed to process ZIP file: {e}")
-            results = [ConversionResult(
-                input_file=input_path,
-                output_file=None,
-                status=ConversionStatus.FAILED,
-                error_message=f"ZIP extraction failed: {str(e)}"
-            )]
-    
-    elif input_path.is_file():
-        # Single RVZ file conversion
-        output_wbfs = determine_output_path(
-            input_path,
-            output_dir,
-            preserve_structure=not args.flat,
-            is_file=True
-        )
-        
-        result = engine.convert_file(
-            input_path,
-            output_wbfs,
-            keep_iso=args.keep_iso,
-            verbose=args.verbose
-        )
-        
-        results = [result]
-    else:
-        # Directory conversion - process ZIPs individually first, then regular RVZ files
-        results = []
-        
-        # First, find and process ZIP files individually
-        if zip_handler:
-            zip_files = zip_handler.find_zip_files(input_path)
-            for zip_file in zip_files:
-                logger.info(f"Processing ZIP file: {zip_file}")
-                try:
-                    extracted_rvz, extract_dir = zip_handler.extract_rvz_from_zip(zip_file)
-                    logger.info(f"Extracted {len(extracted_rvz)} RVZ file(s) from ZIP")
-                    
-                    zip_results = []
-                    for rvz_file in extracted_rvz:
-                        # Determine output path
-                        if not args.flat:
-                            # Preserve structure - use RVZ name
-                            output_wbfs = output_dir / (rvz_file.stem + ".wbfs")
-                        else:
-                            # Flat output
-                            output_wbfs = output_dir / (rvz_file.stem + ".wbfs")
-                        
-                        result = engine.convert_file(
-                            rvz_file,
-                            output_wbfs,
-                            keep_iso=args.keep_iso,
-                            verbose=args.verbose
-                        )
-                        zip_results.append(result)
-                        results.append(result)
-                    
-                    # Cleanup extracted files unless --keep-extracted
-                    if not args.keep_extracted:
-                        zip_handler.cleanup_extraction(extract_dir)
-                        logger.info("Cleaned up extracted files")
-                    
-                    # Delete original ZIP file immediately after all its files are converted
-                    # For local conversions (no network_mover): always delete after success
-                    # For network conversions: delete if delete_zip is enabled OR delete_after_network_move is enabled
-                    should_delete_zip = not network_mover or args.delete_zip or (args.delete_after_network_move and network_mover)
-                    if should_delete_zip:
-                        all_succeeded = all(r.status == ConversionStatus.SUCCESS for r in zip_results)
-                        if all_succeeded:
-                            try:
-                                zip_file.unlink()
-                                logger.info(f"Deleted original ZIP file: {zip_file}")
-                                print(f"Deleted original ZIP file: {zip_file.name}")
-                            except Exception as e:
-                                logger.warning(f"Failed to delete ZIP file {zip_file}: {e}")
-                                print(f"Warning: Could not delete ZIP file {zip_file.name}: {e}")
-                        else:
-                            logger.info(f"Not deleting ZIP file due to conversion failures: {zip_file}")
-                
-                except Exception as e:
-                    logger.error(f"Failed to process ZIP file {zip_file}: {e}")
-                    results.append(ConversionResult(
-                        input_file=zip_file,
-                        output_file=None,
-                        status=ConversionStatus.FAILED,
-                        error_message=f"ZIP processing failed: {str(e)}"
-                    ))
-        
-        # Then, find and process regular RVZ files (not from ZIPs)
-        rvz_files = list(input_path.rglob("*.rvz"))
-        rvz_files.extend(input_path.rglob("*.RVZ"))
-        
-        # Filter out any RVZ files that are in extraction directories (already processed)
-        if zip_handler:
-            extract_base = zip_handler.extract_dir
-            rvz_files = [f for f in rvz_files if extract_base not in f.parents]
-        
-        if rvz_files:
-            logger.info(f"Found {len(rvz_files)} regular RVZ file(s) to convert")
-            for rvz_file in rvz_files:
-                # Determine output path
-                if not args.flat:
-                    # Preserve structure relative to input
-                    try:
-                        rel_path = rvz_file.relative_to(input_path)
-                        output_wbfs = output_dir / rel_path.with_suffix(".wbfs")
-                    except ValueError:
+                        # Multiple files - use RVZ name
                         output_wbfs = output_dir / (rvz_file.stem + ".wbfs")
-                else:
-                    # Flat output
-                    output_wbfs = output_dir / (rvz_file.stem + ".wbfs")
+                    
+                    result = engine.convert_file(
+                        rvz_file,
+                        output_wbfs,
+                        keep_iso=args.keep_iso,
+                        verbose=args.verbose
+                    )
+                    results.append(result)
+                    
+                    # Move to network if enabled and conversion succeeded
+                    if network_mover and result.status == ConversionStatus.SUCCESS and result.output_file:
+                        move_result = network_mover.move_file(result.output_file, output_dir)
+                        if move_result.success:
+                            logger.info(f"Successfully moved {result.output_file.name} to network")
+                            # Delete local WBFS if option is enabled
+                            if args.delete_after_network_move:
+                                try:
+                                    result.output_file.unlink()
+                                    logger.info(f"Deleted local WBFS file: {result.output_file.name}")
+                                    print(f"Deleted local WBFS file: {result.output_file.name}")
+                                except Exception as e:
+                                    logger.warning(f"Failed to delete local WBFS file: {e}")
+                        elif not move_result.skipped:
+                            logger.warning(f"Failed to move {result.output_file.name} to network: {move_result.error_message}")
+                        else:
+                            logger.info(f"Skipped moving {result.output_file.name} to network (file exists)")
                 
-                result = engine.convert_file(
-                    rvz_file,
-                    output_wbfs,
-                    keep_iso=args.keep_iso,
-                    verbose=args.verbose
-                )
-                results.append(result)
+                # Cleanup extracted files unless --keep-extracted
+                if not args.keep_extracted:
+                    zip_handler.cleanup_extraction(extract_dir)
+                    logger.info("Cleaned up extracted files")
                 
-                # Move to network if enabled and conversion succeeded
-                if network_mover and result.status == ConversionStatus.SUCCESS and result.output_file:
-                    move_result = network_mover.move_file(result.output_file, output_dir)
-                    if move_result.success:
-                        logger.info(f"Successfully moved {result.output_file.name} to network")
-                        # Delete local WBFS if option is enabled
-                        if args.delete_after_network_move:
-                            try:
-                                result.output_file.unlink()
-                                logger.info(f"Deleted local WBFS file: {result.output_file.name}")
-                                print(f"Deleted local WBFS file: {result.output_file.name}")
-                            except Exception as e:
-                                logger.warning(f"Failed to delete local WBFS file: {e}")
-                    elif not move_result.skipped:
-                        logger.warning(f"Failed to move {result.output_file.name} to network: {move_result.error_message}")
+                # Delete original ZIP file if all conversions succeeded
+                # For local conversions (no network_mover): always delete after success
+                # For network conversions: delete if delete_zip is enabled OR delete_after_network_move is enabled
+                should_delete_zip = not network_mover or args.delete_zip or (args.delete_after_network_move and network_mover)
+                if should_delete_zip:
+                    all_succeeded = all(r.status == ConversionStatus.SUCCESS for r in results)
+                    if all_succeeded:
+                        try:
+                            input_path.unlink()
+                            logger.info(f"Deleted original ZIP file: {input_path}")
+                            print(f"Deleted original ZIP file: {input_path.name}")
+                        except Exception as e:
+                            logger.warning(f"Failed to delete ZIP file {input_path}: {e}")
+                            print(f"Warning: Could not delete ZIP file {input_path.name}: {e}")
                     else:
-                        logger.info(f"Skipped moving {result.output_file.name} to network (file exists)")
+                        logger.info(f"Not deleting ZIP file due to conversion failures: {input_path}")
         
-        if not results:
-            logger.error(f"No RVZ files found in {input_path}")
-            results = [ConversionResult(
-                input_file=input_path,
-                output_file=None,
-                status=ConversionStatus.FAILED,
-                error_message="No RVZ files found (including in ZIP archives)"
-            )]
-        
-        # Print summary (only if not in watch mode)
-        print_summary(results)
-        
-        # Exit with appropriate code
-        failed_count = sum(1 for r in results if r.status == ConversionStatus.FAILED)
-        if failed_count > 0:
-            sys.exit(1)
+            except Exception as e:
+                logger.error(f"Failed to process ZIP file: {e}")
+                results = [ConversionResult(
+                    input_file=input_path,
+                    output_file=None,
+                    status=ConversionStatus.FAILED,
+                    error_message=f"ZIP extraction failed: {str(e)}"
+                )]
+    
+        elif input_path.is_file():
+            # Single RVZ file conversion
+            output_wbfs = determine_output_path(
+                input_path,
+                output_dir,
+                preserve_structure=not args.flat,
+                is_file=True
+            )
+            
+            result = engine.convert_file(
+                input_path,
+                output_wbfs,
+                keep_iso=args.keep_iso,
+                verbose=args.verbose
+            )
+            
+            results = [result]
         else:
-            sys.exit(0)
+            # Directory conversion - process ZIPs individually first, then regular RVZ files
+            results = []
+            
+            # First, find and process ZIP files individually
+            if zip_handler:
+                zip_files = zip_handler.find_zip_files(input_path)
+                for zip_file in zip_files:
+                    logger.info(f"Processing ZIP file: {zip_file}")
+                    try:
+                        extracted_rvz, extract_dir = zip_handler.extract_rvz_from_zip(zip_file)
+                        logger.info(f"Extracted {len(extracted_rvz)} RVZ file(s) from ZIP")
+                        
+                        zip_results = []
+                        for rvz_file in extracted_rvz:
+                            # Determine output path
+                            if not args.flat:
+                                # Preserve structure - use RVZ name
+                                output_wbfs = output_dir / (rvz_file.stem + ".wbfs")
+                            else:
+                                # Flat output
+                                output_wbfs = output_dir / (rvz_file.stem + ".wbfs")
+                            
+                            result = engine.convert_file(
+                                rvz_file,
+                                output_wbfs,
+                                keep_iso=args.keep_iso,
+                                verbose=args.verbose
+                            )
+                            zip_results.append(result)
+                            results.append(result)
+                        
+                        # Cleanup extracted files unless --keep-extracted
+                        if not args.keep_extracted:
+                            zip_handler.cleanup_extraction(extract_dir)
+                            logger.info("Cleaned up extracted files")
+                        
+                        # Delete original ZIP file immediately after all its files are converted
+                        # For local conversions (no network_mover): always delete after success
+                        # For network conversions: delete if delete_zip is enabled OR delete_after_network_move is enabled
+                        should_delete_zip = not network_mover or args.delete_zip or (args.delete_after_network_move and network_mover)
+                        if should_delete_zip:
+                            all_succeeded = all(r.status == ConversionStatus.SUCCESS for r in zip_results)
+                            if all_succeeded:
+                                try:
+                                    zip_file.unlink()
+                                    logger.info(f"Deleted original ZIP file: {zip_file}")
+                                    print(f"Deleted original ZIP file: {zip_file.name}")
+                                except Exception as e:
+                                    logger.warning(f"Failed to delete ZIP file {zip_file}: {e}")
+                                    print(f"Warning: Could not delete ZIP file {zip_file.name}: {e}")
+                            else:
+                                logger.info(f"Not deleting ZIP file due to conversion failures: {zip_file}")
+                    
+                    except Exception as e:
+                        logger.error(f"Failed to process ZIP file {zip_file}: {e}")
+                        results.append(ConversionResult(
+                            input_file=zip_file,
+                            output_file=None,
+                            status=ConversionStatus.FAILED,
+                            error_message=f"ZIP processing failed: {str(e)}"
+                        ))
+            
+            # Then, find and process regular RVZ files (not from ZIPs)
+            seen = set()
+            rvz_files = []
+            for pattern in ("*.rvz", "*.RVZ"):
+                for f in input_path.rglob(pattern):
+                    key = str(f.resolve()).lower()
+                    if key not in seen:
+                        seen.add(key)
+                        rvz_files.append(f)
+            
+            # Filter out any RVZ files that are in extraction directories (already processed)
+            if zip_handler:
+                extract_base = zip_handler.extract_dir
+                rvz_files = [f for f in rvz_files if extract_base not in f.parents]
+            
+            if rvz_files:
+                logger.info(f"Found {len(rvz_files)} regular RVZ file(s) to convert")
+                for rvz_file in rvz_files:
+                    # Determine output path
+                    if not args.flat:
+                        # Preserve structure relative to input
+                        try:
+                            rel_path = rvz_file.relative_to(input_path)
+                            output_wbfs = output_dir / rel_path.with_suffix(".wbfs")
+                        except ValueError:
+                            output_wbfs = output_dir / (rvz_file.stem + ".wbfs")
+                    else:
+                        # Flat output
+                        output_wbfs = output_dir / (rvz_file.stem + ".wbfs")
+                    
+                    result = engine.convert_file(
+                        rvz_file,
+                        output_wbfs,
+                        keep_iso=args.keep_iso,
+                        verbose=args.verbose
+                    )
+                    results.append(result)
+                    
+                    # Move to network if enabled and conversion succeeded
+                    if network_mover and result.status == ConversionStatus.SUCCESS and result.output_file:
+                        move_result = network_mover.move_file(result.output_file, output_dir)
+                        if move_result.success:
+                            logger.info(f"Successfully moved {result.output_file.name} to network")
+                            # Delete local WBFS if option is enabled
+                            if args.delete_after_network_move:
+                                try:
+                                    result.output_file.unlink()
+                                    logger.info(f"Deleted local WBFS file: {result.output_file.name}")
+                                    print(f"Deleted local WBFS file: {result.output_file.name}")
+                                except Exception as e:
+                                    logger.warning(f"Failed to delete local WBFS file: {e}")
+                        elif not move_result.skipped:
+                            logger.warning(f"Failed to move {result.output_file.name} to network: {move_result.error_message}")
+                        else:
+                            logger.info(f"Skipped moving {result.output_file.name} to network (file exists)")
+            
+            if not results:
+                logger.error(f"No RVZ files found in {input_path}")
+                results = [ConversionResult(
+                    input_file=input_path,
+                    output_file=None,
+                    status=ConversionStatus.FAILED,
+                    error_message="No RVZ files found (including in ZIP archives)"
+                )]
+            
+            # Print summary (only if not in watch mode)
+            print_summary(results)
+            
+            # Exit with appropriate code
+            failed_count = sum(1 for r in results if r.status == ConversionStatus.FAILED)
+            if failed_count > 0:
+                sys.exit(1)
+            else:
+                sys.exit(0)
     
     # Handle watch mode
     if args.watch:
@@ -667,6 +687,11 @@ Examples:
                 print(f"ERROR: Failed to process {input_file.name}: {e}")
         
         # Create and start watch mode
+        if WatchMode is None:
+            logger.error("Watch mode is unavailable: could not import WatchMode from src.watch_mode")
+            print("ERROR: Watch mode is unavailable: missing src.watch_mode")
+            sys.exit(1)
+
         watch_mode = WatchMode(
             watch_dir=input_path,
             output_dir=output_dir,

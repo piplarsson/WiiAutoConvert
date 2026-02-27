@@ -1,138 +1,48 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""
-PyInstaller spec file for WiiAutoConvert
-Customize this file for advanced build options.
-"""
+from PyInstaller.utils.hooks import collect_all
 
-import sys
-import os
-import logging
-from pathlib import Path
-from datetime import datetime
+datas = [('tools', 'tools')]
+binaries = []
+hiddenimports = ['customtkinter', 'tkinterdnd2', 'tkinter', 'tkinter.filedialog', 'tkinter.messagebox']
+tmp_ret = collect_all('customtkinter')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('tkinterdnd2')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
-# Set up build logging
-# Note: Don't use FileHandler here since batch script already redirects stdout/stderr to build.log
-# All print() and logging will be captured by the batch script's redirection
-build_logger = logging.getLogger('build')
-build_logger.setLevel(logging.DEBUG)
 
-# Remove existing handlers
-build_logger.handlers.clear()
+a = Analysis(
+    ['main.py'],
+    pathex=[],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+    optimize=0,
+)
+pyz = PYZ(a.pure)
 
-# Only use console handler - output will be captured by batch script's redirection
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.DEBUG)  # Log everything, batch script will capture it
-formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-console_handler.setFormatter(formatter)
-build_logger.addHandler(console_handler)
-
-build_logger.info("=" * 60)
-build_logger.info("PyInstaller Build Started")
-build_logger.info(f"Python: {sys.version}")
-build_logger.info(f"Platform: {sys.platform}")
-build_logger.info(f"Working directory: {Path.cwd()}")
-
-block_cipher = None
-
-# Determine data files based on platform
-if sys.platform == "win32":
-    tools_sep = ";"
-else:
-    tools_sep = ":"
-
-# Prepare datas list - only include tools directory if it exists
-# Tools will be downloaded automatically if missing
-datas = []
-tools_dir = Path('tools')
-try:
-    if tools_dir.exists() and any(tools_dir.iterdir()):
-        # Only include tools if directory exists and has content
-        datas.append(('tools', 'tools'))
-        build_logger.info(f"Including tools directory: {tools_dir} (has content)")
-    else:
-        # Empty tools directory is expected - tools will be auto-downloaded at runtime
-        build_logger.info("tools/ directory is empty (expected). Tools will be downloaded automatically when executable runs.")
-        build_logger.info("This is correct behavior - we don't bundle Dolphin/WIT due to licensing.")
-except Exception as e:
-    build_logger.warning(f"Error checking tools directory: {e}")
-    build_logger.info("Continuing without tools directory (will be auto-downloaded at runtime)")
-
-try:
-    build_logger.info("Starting Analysis phase...")
-    build_logger.debug(f"Data files: {datas}")
-    build_logger.debug(f"Hidden imports: customtkinter, tkinter, src.tool_downloader, etc.")
-    
-    a = Analysis(
-        ['main.py'],
-        pathex=[],
-        binaries=[],
-        datas=datas,
-        hiddenimports=[
-            'customtkinter',
-            'tkinter',
-            'tkinter.filedialog',
-            'tkinter.messagebox',
-            'tkinter.scrolledtext',
-            'src.tool_downloader',
-            'urllib.request',
-            'urllib.error',
-            'zipfile',
-            'shutil',
-        ],
-        hookspath=[],
-        hooksconfig={},
-        runtime_hooks=[],
-        excludes=[],
-        win_no_prefer_redirects=False,
-        win_private_assemblies=False,
-        cipher=block_cipher,
-        noarchive=False,
-    )
-    build_logger.info("Analysis phase completed successfully")
-except Exception as e:
-    build_logger.error(f"Analysis phase failed: {e}", exc_info=True)
-    raise
-
-try:
-    build_logger.info("Building PYZ archive...")
-    pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
-    build_logger.info("PYZ archive built successfully")
-except Exception as e:
-    build_logger.error(f"PYZ build failed: {e}", exc_info=True)
-    raise
-
-try:
-    build_logger.info("Building EXE...")
-    exe = EXE(
-        pyz,
-        a.scripts,
-        a.binaries,
-        a.zipfiles,
-        a.datas,
-        [],
-        name='WiiAutoConvert',
-        debug=False,
-        bootloader_ignore_signals=False,
-        strip=False,
-        upx=True,
-        upx_exclude=[],
-        runtime_tmpdir=None,
-        console=False,  # No console window (GUI mode)
-        disable_windowed_traceback=False,
-        argv_emulation=False,
-        target_arch=None,
-        codesign_identity=None,
-        entitlements_file=None,
-        icon=None,  # Add icon file path here if available
-    )
-    build_logger.info("=" * 60)
-    build_logger.info("Build completed successfully!")
-    build_logger.info(f"Executable location: dist/WiiAutoConvert.exe")
-    build_logger.info("=" * 60)
-except Exception as e:
-    build_logger.error("=" * 60)
-    build_logger.error("Build failed during EXE creation!")
-    build_logger.error(f"Error: {e}", exc_info=True)
-    build_logger.error("=" * 60)
-    raise
-
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.datas,
+    [],
+    name='WiiAutoConvert',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon='WiiAutoConvert.ico',
+)
