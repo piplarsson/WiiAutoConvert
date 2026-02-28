@@ -26,8 +26,13 @@ class ToolRunner:
             auto_download: If True, automatically download missing tools.
         """
         if project_root is None:
-            # Auto-detect project root (parent of src/)
-            project_root = Path(__file__).parent.parent
+            # Auto-detect project root
+            # If running as executable (PyInstaller), use sys.executable's directory
+            # Otherwise, use parent of src/
+            if getattr(sys, 'frozen', False):
+                project_root = Path(sys.executable).parent
+            else:
+                project_root = Path(__file__).parent.parent
         
         self.project_root = Path(project_root).resolve()
         self._dolphin_tool = None
@@ -36,6 +41,22 @@ class ToolRunner:
         # Check and download tools if missing
         if auto_download:
             self._ensure_tools()
+
+    def _subprocess_kwargs(self) -> dict:
+        kwargs = {
+            "capture_output": True,
+            "text": True,
+            "timeout": 3600,
+        }
+
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            kwargs["startupinfo"] = startupinfo
+
+        return kwargs
     
     def _ensure_tools(self):
         """Ensure required tools are available, download if missing."""
@@ -130,12 +151,7 @@ class ToolRunner:
             cmd.append("-v")
         
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=3600  # 1 hour timeout for large files
-            )
+            result = subprocess.run(cmd, **self._subprocess_kwargs())
             return result.returncode, result.stdout, result.stderr
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"Dolphin conversion timed out for {input_rvz}")
@@ -173,12 +189,7 @@ class ToolRunner:
             cmd.append("-v")
         
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=3600  # 1 hour timeout for large files
-            )
+            result = subprocess.run(cmd, **self._subprocess_kwargs())
             return result.returncode, result.stdout, result.stderr
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"WIT conversion timed out for {input_iso}")

@@ -94,12 +94,19 @@ class MetadataLookup:
                 str(iso_or_wbfs_path)
             ]
             
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
+            kwargs = {
+                "capture_output": True,
+                "text": True,
+                "timeout": 30,
+            }
+
+            if sys.platform == "win32":
+                kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                kwargs["startupinfo"] = startupinfo
+
+            result = subprocess.run(cmd, **kwargs)
             
             if result.returncode != 0:
                 return None

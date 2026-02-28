@@ -346,12 +346,19 @@ class ToolDownloader:
             if progress_callback:
                 progress_callback("Extracting archive...")
             
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=300  # 5 minute timeout
-            )
+            kwargs = {
+                "capture_output": True,
+                "text": True,
+                "timeout": 300,  # 5 minute timeout
+            }
+
+            if sys.platform == "win32":
+                kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                kwargs["startupinfo"] = startupinfo
+
+            result = subprocess.run(cmd, **kwargs)
             
             if result.returncode != 0:
                 error_msg = f"7z extraction failed: {result.stderr}"
